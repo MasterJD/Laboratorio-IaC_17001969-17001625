@@ -1,0 +1,196 @@
+# Estado del laboratorio — Análisis de seguridad IaC en el pipeline
+
+Documento de trabajo local. **No se sube al repositorio** (está en `.gitignore`).
+
+- Repositorio: https://github.com/MasterJD/Laboratorio-IaC_17001969-17001625 (público)
+- Cuentas que aparecen en la actividad: `MasterJD` (abre los PR) y `pagedgra888` (push inicial a `main`)
+- Última verificación: 2026-11-24
+
+---
+
+## 1. Lo que ya está hecho
+
+### 1.1 Código base y pipeline
+
+- `main` en `6378f9c`: workflow, Terraform, Ansible, Dockerfile y estructura del repo.
+- `.github/workflows/iac-security.yml`:
+  - Dispara en `pull_request` y en `push` a `main`.
+  - Versiones fijas: `checkov==3.4.5`, `ansible-core==2.22.0`, `ansible-lint==26.11.0`.
+  - Reporte SARIF con `--soft-fail` + publicación en Code Scanning.
+  - Tres gates duros: Checkov, `ansible-playbook --syntax-check` y `ansible-lint --profile production`.
+
+### 1.2 Versiones verificadas en PyPI
+
+| Paquete | Versión fijada | Nota |
+|---|---|---|
+| checkov | 3.4.5 | existe |
+| ansible-lint | 26.11.0 | existe |
+| ansible-core | 2.22.0 | existe, pero declara `requires_python >=3.13` |
+
+Consecuencia: el `python-version: "3.13"` del workflow es obligatorio, no se puede bajar. (El `pip index` local mostraba 3.4.3 como última porque estaba desactualizado.)
+
+### 1.3 Corridas en GitHub Actions
+
+| Run | Evento | Rama | Resultado |
+|---|---|---|---|
+| [45535949705](https://github.com/MasterJD/Laboratorio-IaC_17001969-17001625/actions/runs/45535949705) | push | `main` | rojo |
+| [45540508927](https://github.com/MasterJD/Laboratorio-IaC_17001969-17001625/actions/runs/45540508927) | pull_request | `demo/pr1-ssh-abierto` (PR #1) | rojo |
+| [45540538063](https://github.com/MasterJD/Laboratorio-IaC_17001969-17001625/actions/runs/45540538063) | pull_request | `feat/politica-excepcion` (PR #2) | rojo |
+
+En las tres: instalación ✅, reporte SARIF ✅, publicación en Code Scanning ✅, **Gate Checkov ❌**, y los dos pasos de Ansible quedan `skipped`. El SARIF ya es visible en Security → Code scanning (check `Checkov` en verde, "No new alerts in code changed by this pull request").
+
+### 1.4 Línea base real (reproducida con las versiones del pipeline)
+
+Medida con Python 3.13.12 + checkov 3.4.5, comando del gate:
+
+| Tipo | Hallazgos únicos (`main`) |
+|---|---|
+| Terraform | 14 |
+| Dockerfile | 4 |
+| Ansible | 1 |
+| **Total** | **19** |
+
+Diferencia con la medición vieja (13 en Terraform con checkov 3.2.0): aparece **`CKV_AWS_382`** (egress `0.0.0.0/0` al puerto -1), que 3.2.0 no traía. En el informe conviene citar 14/4/1 indicando la versión de la herramienta.
+
+**ansible-lint 26.11.0 todavía no se pudo medir**: ansible-core 2.22 usa `os.register_at_fork`, que no existe en Windows. Las "14 fallas" registradas antes son de ansible-lint 6.22 y no son comparables. Ese conteo solo sale en Linux (contenedor, WSL o el propio CI).
+
+### 1.5 Ramas y PRs
+
+**`demo/pr1-ssh-abierto`** — `37133a3`, 1 commit, 1 archivo. PR #1.
+- Agrega `ingress` 22/tcp desde `0.0.0.0/0` en `aws_security_group.web`.
+- Verificado con 3.4.5: `CKV_AWS_24` falla (además del `CKV_AWS_260` que ya existía).
+
+**`feat/politica-excepcion`** — `47c9e06` (política) + `a6943e3` (excepción), 6 archivos. PR #2.
+- `politicas/CKV2_ORG_101_etiqueta_owner.yaml`: exige etiqueta `Owner` en `aws_security_group`, `aws_ebs_volume` y `aws_network_interface`.
+- `politicas/CKV2_ORG_102_entorno_valido.yaml`: `Environment` solo admite `^(dev|prod)$`.
+- `politicas/ejemplos/falla/main.tf` y `politicas/ejemplos/pasa/main.tf`: casos mínimo que falla y que pasa.
+- `politicas/README.md`: regla, comandos, resultados y nota sobre la excepción.
+- `infra/main.tf`: `encrypted = true` + la única excepción `#checkov:skip=CKV_AWS_189:...` (justificación, aprobación, vence 2027-06-30).
+
+Resultados verificados:
+
+| Caso | Passed | Failed | Exit |
+|---|---|---|---|
+| `politicas/ejemplos/falla` | 0 | 4 | 1 |
+| `politicas/ejemplos/pasa` | 4 | 0 | 0 |
+
+Gate completo sobre esa rama: **23 hallazgos** (Terraform 18 = 12 + 6 de la política, Docker 4, Ansible 1), con `CKV_AWS_3` en verde y `CKV_AWS_189` skipped (1 skip, el único del repo).
+
+---
+
+## 2. Bloqueante actual: la protección de `main` no está activa
+
+La API dice, para ambos PR:
+
+```
+PR 1 -> mergeable=True  mergeable_state=unstable
+PR 2 -> mergeable=True  mergeable_state=unstable
+```
+
+`unstable` = fallaron checks, pero ninguno es obligatorio → **el merge está permitido**. El único ruleset del repo es `Initial Commit Permission`, que solo prohíbe borrar la rama.
+
+⚠️ La captura `evidence/merging_blocked.png` **no sirve**: muestra "No conflicts with base branch — Merging can be performed automatically" y el botón "Merge pull request" habilitado. Prueba lo contrario de lo que se necesita. Hay que recapturar después de activar el ruleset.
+
+### Cómo activarlo (MasterJD, admin)
+
+Settings → Rules → Rulesets → New branch ruleset (o Settings → Branches):
+
+- Target: `main`
+- ✅ Require a pull request before merging
+- ✅ Require status checks to pass → **`Escaneo IaC`**
+- Sin bypass (o sin bypass para quien hace la demo)
+
+Nombre exacto del check: **`Escaneo IaC`** (el job). En el PR también aparece `Checkov` en verde, que lo crea Code Scanning al procesar el SARIF; si se exige ese, el PR pasa y la demo no bloquea.
+
+Efecto esperado: el PR #1 pasa de `unstable` a `blocked` sin reabrirlo.
+
+---
+
+## 3. Siguientes pasos
+
+| # | Paso | Quién | Evidencia |
+|---|---|---|---|
+| 1 | Activar el ruleset de `main` con PR obligatorio + `Escaneo IaC` | MasterJD | captura de Settings |
+| 2 | Recapturar el PR #1 con "Merging is blocked" + job rojo | ambos | `evidence/` |
+| 3 | Cerrar el PR #1 **sin fusionar** | MasterJD | captura del PR cerrado |
+| 4 | Remediación en la rama `feat/politica-excepcion` hasta verde | compañero | PR #2 |
+| 5 | Fusionar el PR #2 y confirmar `main` en verde | MasterJD | run de `main` |
+| 6 | Redactar `docs/informe.pdf` (9 secciones + declaración de uso de IA) | ambos | PDF |
+
+Decisión pendiente: el PR #2 hoy solo agrega política y excepción, así que nunca quedará verde solo. Lo más simple es **reutilizarlo como PR de remediación** (el compañero empuja los arreglos a esa rama). Alternativa: cerrarlo y crear `fix/remediacion` partiendo de `feat/politica-excepcion`.
+
+---
+
+## 4. Checklist de remediación (lo que sigue fallando en la rama)
+
+23 hallazgos únicos con checkov 3.4.5:
+
+### Terraform (18)
+
+- `CKV_AWS_23` — falta descripción en el SG y en sus reglas.
+- `CKV_AWS_260` — ingress 80/tcp desde `0.0.0.0/0`.
+- `CKV_AWS_382` — egress `-1` a `0.0.0.0/0`.
+- `CKV_AWS_62`, `CKV_AWS_63`, `CKV_AWS_286`, `CKV_AWS_287`, `CKV_AWS_288`, `CKV_AWS_289`, `CKV_AWS_290`, `CKV_AWS_355`, `CKV2_AWS_40` — política IAM con `Action: "*"` y `Resource: "*"`.
+- `CKV2_ORG_101` (×3) y `CKV2_ORG_102` (×3) — SG, ENI y EBS sin `Owner` / `Environment`.
+
+### Dockerfile (4)
+
+- `CKV_DOCKER_2` HEALTHCHECK, `CKV_DOCKER_3` USER no root, `CKV_DOCKER_4` COPY en vez de ADD, `CKV_DOCKER_7` tag fijo en vez de `latest`.
+
+### Ansible (1 conocido + lo que falte)
+
+- `CKV2_ANSIBLE_2` — `get_url` con HTTP.
+- Además hay que esperar fallas de `ansible-lint 26.11` y del `--syntax-check`, que **nunca corrieron** en CI (siempre quedan skipped porque Checkov falla antes). No declarar "verde" hasta ver esos dos pasos ejecutarse.
+
+---
+
+## 5. Decisiones técnicas y trampas ya identificadas
+
+1. **El `checkov:skip` en Terraform va dentro del bloque.** En 3.4.5, puesto en la línea anterior al `resource` no suprime nada (probado con `CKV_AWS_3` y `CKV_AWS_189`).
+2. **La excepción necesita `encrypted = true`.** Sin cifrado, saltarse `CKV_AWS_189` (CMK) sería incoherente, porque el volumen seguiría sin cifrar. Por eso ese cambio viaja en el mismo commit.
+3. **La aprobación de la excepción es un marcador.** "acta LAB-EXC-001 del 2026-11-25" hay que sustituirla por una referencia real (issue o comentario del PR donde MasterJD apruebe) o el informe queda con una aprobación no verificable.
+4. **La política suma 6 hallazgos al gate** hasta que se etiqueten SG, ENI y EBS. Es esperado, no un error.
+5. **Los casos de ejemplo no afectan el gate**: el pipeline escanea solo `infra`, `ansible` y `docker`. Si alguien corre `checkov -d .`, debe usar `--skip-path politicas/ejemplos`.
+6. **ansible-core 2.22 no corre en Windows** (POSIX-only). Para medir ansible-lint en local hace falta contenedor/WSL.
+7. **En Windows, `checkov -d infra -d ansible -d docker` duplica resultados** por rutas (`\main.tf` y `\..\infra\main.tf`). Los conteos por `check_id` + recurso no cambian; en Linux no pasa.
+8. **`mergeable_state` es la señal para la captura.** `unstable` = se puede fusionar; `blocked` = protección funcionando.
+
+---
+
+## 6. Comandos de verificación local
+
+```powershell
+uv venv --python 3.13 "$env:TEMP\opencode\iac" 
+uv pip install --python "$env:TEMP\opencode\iac\Scripts\python.exe" `
+  checkov==3.4.5 ansible-core==2.22.0 ansible-lint==26.11.0
+
+# Gate de Checkov (mismo comando del workflow)
+& "$env:TEMP\opencode\iac\Scripts\python.exe" "$env:TEMP\opencode\iac\Scripts\checkov" `
+  -d infra -d ansible -d docker --external-checks-dir politicas --compact --quiet
+
+# Política: caso que falla y caso que pasa
+& "$env:TEMP\opencode\iac\Scripts\python.exe" "$env:TEMP\opencode\iac\Scripts\checkov" `
+  -d politicas/ejemplos/falla --external-checks-dir politicas `
+  --check CKV2_ORG_101,CKV2_ORG_102 --compact
+& "$env:TEMP\opencode\iac\Scripts\python.exe" "$env:TEMP\opencode\iac\Scripts\checkov" `
+  -d politicas/ejemplos/pasa --external-checks-dir politicas `
+  --check CKV2_ORG_101,CKV2_ORG_102 --compact
+```
+
+---
+
+## 7. Mapa del informe (9 secciones)
+
+| Sección | Material disponible | Falta |
+|---|---|---|
+| 1. Portada, integrantes, enlace | repo y cuentas | nombres reales |
+| 2. Línea base | 14/4/1 + 19 total, `CKV_AWS_382` | 5 hallazgos más graves con riesgo (redactar) |
+| 3. Diseño del pipeline | workflow, gates, SARIF | explicar por qué versiones fijas |
+| 4. Evidencia del gate | PR #1 rojo | captura con "Merging is blocked" |
+| 5. Evidencia SARIF | Code Scanning, check `Checkov` | captura de la pestaña Security |
+| 6. Remediación | 23 → 0, tabla antes/después | PR fusionado en verde |
+| 7. Excepción | `infra/main.tf` + `politicas/README.md` | aprobación real |
+| 8. Política propia | `politicas/*.yaml`, falla/pasa | capturas de los dos casos |
+| 9. Conclusiones | limitaciones ya detectadas | redactar |
+
+Declaración de uso de IA: la tarea la permite si se declara para qué se usó. Dejar explícito que se usó como apoyo para diagnóstico del pipeline, redacción de la política y revisión de la remediación, con verificación local de los resultados.
