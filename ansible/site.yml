@@ -1,19 +1,30 @@
 ---
-- hosts: web
+- name: Configurar servidores web
+  hosts: web
   become: true
   tasks:
-    - apt:
+    - name: Instalar nginx
+      ansible.builtin.apt:
         name: nginx
-        state: latest
+        state: present
 
-    - shell: systemctl restart nginx
-
-    - copy:
+    - name: Copiar configuracion de la aplicacion
+      ansible.builtin.copy:
         src: files/app.conf
         dest: /etc/nginx/conf.d/app.conf
-        mode: 0777
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Reiniciar nginx
 
     - name: Descargar script
-      get_url:
-        url: http://example.com/setup.sh
+      ansible.builtin.get_url:
+        url: https://example.com/setup.sh
         dest: /tmp/setup.sh
+        mode: "0644"
+
+  handlers:
+    - name: Reiniciar nginx
+      ansible.builtin.service:
+        name: nginx
+        state: restarted

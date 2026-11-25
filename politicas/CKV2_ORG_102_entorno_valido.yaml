@@ -1,0 +1,17 @@
+---
+# Politica propia de la organizacion (check externo de Checkov en YAML).
+# Regla: la etiqueta Environment solo admite los valores dev o prod, para que
+# los inventarios y los tableros de costo no reciban entornos inventados.
+metadata:
+  id: "CKV2_ORG_102"
+  name: "Ensure the Environment tag is either dev or prod"
+  category: "GENERAL_SECURITY"
+definition:
+  cond_type: "attribute"
+  resource_types:
+    - "aws_security_group"
+    - "aws_ebs_volume"
+    - "aws_network_interface"
+  attribute: "tags.Environment"
+  operator: "regex_match"
+  value: "^(dev|prod)$"
