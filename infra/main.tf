@@ -23,6 +23,14 @@ resource "aws_security_group" "web" {
     cidr_blocks = ["10.0.0.0/16"]
   }
 
+  ingress {
+    description = "SSH desde cualquier origen"
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
   egress {
     description = "HTTPS hacia la red interna"
     from_port   = 443
