@@ -48,7 +48,7 @@ resource "aws_network_interface" "app" {
 }
 
 resource "aws_ebs_volume" "datos" {
-  #checkov:skip=CKV_AWS_189:La cuenta de laboratorio no tiene cuota para una CMK dedicada y el volumen guarda datos de prueba. Se acepta el cifrado con la clave administrada aws/ebs. Aprobacion: MasterJD (dueno del repo), acta LAB-EXC-001 del 2026-11-25. Vence: 2027-06-30.
+  #checkov:skip=CKV_AWS_189:La cuenta de laboratorio no tiene cuota para una CMK dedicada y el volumen guarda datos de prueba. Se acepta el cifrado con la clave administrada aws/ebs. Aprobacion: MasterJD (dueno del repo) en https://github.com/MasterJD/Laboratorio-IaC_17001969-17001625/pull/2#issuecomment-7152883338 (2026-11-25). Vence: 2027-06-30.
   availability_zone = "us-east-1a"
   size              = 20
   encrypted         = true
