@@ -1,0 +1,19 @@
+---
+- hosts: web
+  become: true
+  tasks:
+    - apt:
+        name: nginx
+        state: latest
+
+    - shell: systemctl restart nginx
+
+    - copy:
+        src: files/app.conf
+        dest: /etc/nginx/conf.d/app.conf
+        mode: 0777
+
+    - name: Descargar script
+      get_url:
+        url: http://example.com/setup.sh
+        dest: /tmp/setup.sh

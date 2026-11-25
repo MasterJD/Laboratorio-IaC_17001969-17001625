@@ -1,0 +1,6 @@
+.venv/
+.terraform/
+*.tfstate*
+reportes/*.sarif
+Guia_SCA_SBOM_DependencyTrack-DependencyCheck.pdf
+Tarea_An_lisis_de_seguridad_IaC_en_el_pipeline.pdf
