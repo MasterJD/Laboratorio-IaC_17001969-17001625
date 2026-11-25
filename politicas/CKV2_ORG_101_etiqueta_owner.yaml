@@ -1,0 +1,16 @@
+---
+# Politica propia de la organizacion (check externo de Checkov en YAML).
+# Regla: todo recurso de red o de almacenamiento debe declarar la etiqueta
+# Owner para poder atribuir el costo y el responsable durante un incidente.
+metadata:
+  id: "CKV2_ORG_101"
+  name: "Ensure network and storage resources declare the Owner tag"
+  category: "GENERAL_SECURITY"
+definition:
+  cond_type: "attribute"
+  resource_types:
+    - "aws_security_group"
+    - "aws_ebs_volume"
+    - "aws_network_interface"
+  attribute: "tags.Owner"
+  operator: "exists"
